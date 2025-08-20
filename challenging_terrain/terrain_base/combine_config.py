@@ -25,11 +25,13 @@ class combine_config:
         ]
 
         proportions = [
-             ("single", 3, 1),#
+             #("single", 3, 1),
                 # ("addition", 0, 0.5),
                 # ("multiplication", 3, 0.4),
-              #  ("single", 5, 0.8),   # 80% 楼梯
-              #  ("single", 3, 0.2),   # 20% 平地（用于基础训练）
+                ("single", 5, 0.5),   # 80% 楼梯
+                ("single", 3, 0.2),
+                ("addition", 0, 0.1),
+                ("multiplication", 2, 0.2)
            #    ("single", 3, 0.8),   # 80% 平坦地形
             #   ("single", 4, 0.2),   # 20% 不平整地形
         ]
