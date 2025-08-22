@@ -204,9 +204,9 @@ class HumanoidRobot(BaseTask):
         if(self.cfg.rewards.is_play):
             if(self.total_times > 0):
                 if(self.total_times > self.last_times):
-                    # print("total_times=",self.total_times)
-                    # print("success_rate=",self.success_times / self.total_times)
-                    # print("complete_rate=",(self.complete_times / self.total_times).cpu().numpy().copy())
+                    print("total_times=",self.total_times)
+                    print("success_rate=",self.success_times / self.total_times)
+                    print("complete_rate=",(self.complete_times / self.total_times).cpu().numpy().copy())
                     self.last_times = self.total_times
 
         return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras

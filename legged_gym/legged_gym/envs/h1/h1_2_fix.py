@@ -139,6 +139,7 @@ class H1_2FixCfg( LeggedRobotCfg ):
 
     class rewards:
         class scales:
+                       
             base_height = -1.0
             termination = -0.0
             tracking_lin_vel = 1.5   # 增加线速度跟踪奖励权重
@@ -153,24 +154,24 @@ class H1_2FixCfg( LeggedRobotCfg ):
             feet_air_time =  2
             collision = -1.
             action_rate = -0.005  # 减少动作变化惩罚，让机器人更自由地运动
-            stand_still = -10.0  # 大幅增加静止惩罚，强制机器人运动
+            stand_still = -1.0  # 大幅增加静止惩罚，强制机器人运动,削弱，原值-10.0
             alive = 0.02  # 进一步降低生存奖励权重
-            forward_progress = 2.0  # 增加前进进度奖励
+            forward_progress = 0.5  # 增加前进进度奖励，削弱，原值2.0
             step_length = 1.0  # 增加步长奖励
             foot_swing_height = 0.5  # 增加脚部摆动高度奖励
             gait_coordination = 1.5  # 增加步态协调性奖励
             motion_penalty = -2.0  # 直接惩罚静止状态
             
             # 新增基于下一个目标点的奖励
-            next_goal_alignment = 1.5    # 下一个目标朝向对齐奖励
-            next_goal_progress = 1.0     # 下一个目标前进进度奖励
+            next_goal_alignment = 3.0    # 下一个目标朝向对齐奖励 (原值: 1.5)
+            next_goal_progress = 2.5     # 下一个目标前进进度奖励 (原值: 1.0)
             
             # 新增防止左右脚交叉的奖励
             foot_crossing_penalty = -1.5  # 惩罚脚部交叉
             alternating_gait = 1.8        # 交替步态奖励
             stride_consistency = 1.2      # 步幅一致性奖励
             body_balance = 1.0            # 身体平衡奖励
-
+            
            
 
         only_positive_rewards = True # if true negative total rewards are clipped at zero (avoids early termination problems)

@@ -32,7 +32,7 @@ class terrain_config:
         num_rows= 10 # number of terrain rows (levels)  # spreaded is benifitiall !
         num_cols = 20 # number of terrain cols (types)
 
-        num_goals = 10
+        num_goals = 5
 
         dataset_points_x = [-1.5, -1.35, -1.2, -1.05, -0.9, -0.75, -0.6, -0.45,
                             -0.45, -0.3, -0.15, 0, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9, 1.05, 1.2,
