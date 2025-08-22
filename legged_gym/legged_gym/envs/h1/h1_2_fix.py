@@ -62,7 +62,7 @@ class H1_2FixCfg( LeggedRobotCfg ):
         }
 
     class env( LeggedRobotCfg.env ):
-        num_envs = 2048
+        num_envs = 256
         n_scan = 132
         n_priv = 3 + 3 + 3 
         n_priv_latent = 4 + 1 + 12 + 12 
@@ -160,6 +160,16 @@ class H1_2FixCfg( LeggedRobotCfg ):
             foot_swing_height = 0.5  # 增加脚部摆动高度奖励
             gait_coordination = 1.5  # 增加步态协调性奖励
             motion_penalty = -2.0  # 直接惩罚静止状态
+            
+            # 新增基于下一个目标点的奖励
+            next_goal_alignment = 1.5    # 下一个目标朝向对齐奖励
+            next_goal_progress = 1.0     # 下一个目标前进进度奖励
+            
+            # 新增防止左右脚交叉的奖励
+            foot_crossing_penalty = -1.5  # 惩罚脚部交叉
+            alternating_gait = 1.8        # 交替步态奖励
+            stride_consistency = 1.2      # 步幅一致性奖励
+            body_balance = 1.0            # 身体平衡奖励
 
            
 

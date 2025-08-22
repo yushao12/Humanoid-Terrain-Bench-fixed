@@ -13,7 +13,7 @@ import math
 class single_terrain:
     def __init__(self, cfg: terrain_config) -> None:
         self.cfg = cfg
-    #定义了九种地形，parkour为有深坑的跑酷地形
+    
     def parkour(terrain, 
             length_x=18.,
             length_y=4.,
@@ -83,7 +83,7 @@ class single_terrain:
 
         # terrain.height_field_raw[final_dis_x:round(length_x/terrain.horizontal_scale), start_y:start_y+mid_y*2] = 0
         return terrain, goals, final_dis_x
-    # (跨栏地形)在平坦地面上放置一系列障碍物
+    
     def hurdle(
             terrain,
             length_x=18.,
@@ -123,7 +123,7 @@ class single_terrain:
             dis_x += flat_size + hurdle_size
 
         return terrain,goals,dis_x
-    #创建狭窄的桥梁，两侧是深坑，宽度可调
+        
     def bridge(terrain,
                length_x=18.0,
                 length_y=4.0,
@@ -159,7 +159,6 @@ class single_terrain:
 
         return terrain,goals,bridge_end_x
 
-    #平坦地面
     def flat(terrain,
             length_x=18.0,
             length_y=4.0,
@@ -175,11 +174,12 @@ class single_terrain:
         platform_size = round(platform_size / terrain.horizontal_scale)
 
         for i in range(num_goals):
-            goals[i]=[start_x+platform_size+length_x/num_goals*i,start_y+length_y//2]
+            # y_pos = round(random.uniform(0,length_y))
+            y_pos = length_y//2
+            goals[i]=[start_x+platform_size+length_x/num_goals*i,start_y+y_pos]
 
         return terrain,goals,length_x
 
-    #不平整地形，随机生成矩形障碍物
     def uneven(terrain,
             length_x=18.0,
             length_y=4.0,
@@ -227,7 +227,7 @@ class single_terrain:
         terrain.height_field_raw[discrete_end_x:discrete_end_x+platform_size , start_y:start_y+mid_y*2] = 0
 
         return terrain,goals,discrete_end_x+platform_size
-    #台阶地形，台阶高度和宽度可调
+
     def stair(terrain,
                 length_x=18.0,
                 length_y=4.0,
@@ -236,10 +236,8 @@ class single_terrain:
                 start_y = 0,
                 platform_size=1.0, 
                 difficulty = 0.5,
-                height_range = [0.15, 0.25],
-               # height_range=[0.3,0.4],
-               # size_range=[0.6,0.7]
-                size_range = [0.8, 1.0]  
+                height_range=[0.1,0.2],
+                size_range=[0.5,0.6]
                 ):
 
         goals = np.zeros((num_goals, 2))
@@ -257,10 +255,12 @@ class single_terrain:
 
         
         for i in range(num_goals):
+
             if(i < num_goals//2):
                 total_step_height += step_height
             else:
                  total_step_height -= step_height
+            # total_step_height += step_height
             terrain.height_field_raw[dis_x : dis_x + step_x, start_y : start_y + per_y*2] = total_step_height
             dis_x += step_x
 
@@ -269,7 +269,6 @@ class single_terrain:
 
         return terrain,goals,start_x+per_x*num_goals
 
-    #波浪地形，波浪高度可调
     def wave(terrain,
             length_x=18.0,
             length_y=4.0,
@@ -298,7 +297,7 @@ class single_terrain:
         terrain.height_field_raw[start_x :start_x + platform_size, start_y:start_y+ mid_y*2] = 0
 
         return terrain,goals,start_x+mid_x*num_goals
-    #斜坡地形
+
     def slope(terrain,
             length_x=18.0,
             length_y=4.0,
@@ -307,7 +306,7 @@ class single_terrain:
             start_y = 0,
             platform_size=1.0, 
             difficulty = 0.5,
-            angle_range = [3.0, 8.0],  # 降低角度范围，从5-15度改为3-8度
+            angle_range = [5.0,15.0],
             uphill=True
             ):    
 
@@ -334,7 +333,6 @@ class single_terrain:
         
         return terrain,goals,start_x + length_x_grid
 
-    #深坑地形
     def gap(terrain,
             length_x=18.0,
             length_y=4.0,
@@ -366,3 +364,4 @@ class single_terrain:
         terrain.height_field_raw[start_x :start_x + platform_size, start_y :start_y + mid_y*2] = 0
 
         return terrain, goals,start_x+mid_x*num_goals
+    

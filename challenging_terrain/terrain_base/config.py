@@ -1,4 +1,5 @@
 class terrain_config:
+        mesh_type = "terrain"
         max_error = 0.1 # for fast
         max_error_camera = 2
 
@@ -14,9 +15,7 @@ class terrain_config:
         gap_size = [0.02, 0.1]
         stepping_stone_distance = [0.02, 0.08]
         downsampled_scale = 0.075
-        
         curriculum = True
-        #curriculum = False
 
         static_friction = 1.0
         dynamic_friction = 1.0
@@ -26,19 +25,14 @@ class terrain_config:
         measured_points_y = [-0.75, -0.6, -0.45, -0.3, -0.15, 0., 0.15, 0.3, 0.45, 0.6, 0.75]
         measure_horizontal_noise = 0.0
 
-        #max_init_terrain_level = 5 # starting curriculum state
-        max_init_terrain_level = 0  # 从最简单的等级开始
-       # terrain_length = 10.
+        max_init_terrain_level = 1 # starting curriculum state
         terrain_length = 10.
         terrain_width = 4.
-        #platform_size = 0
-        platform_size = 2.0
-        #num_rows= 10 # number of terrain rows (levels)  # spreaded is benifitiall !
-        num_rows= 10
-        #num_cols = 20 # number of terrain cols (types)
-        num_cols = 1
-        #num_goals = 10
-        num_goals = 5
+        platform_size = 2.5
+        num_rows= 10 # number of terrain rows (levels)  # spreaded is benifitiall !
+        num_cols = 20 # number of terrain cols (types)
+
+        num_goals = 10
 
         dataset_points_x = [-1.5, -1.35, -1.2, -1.05, -0.9, -0.75, -0.6, -0.45,
                             -0.45, -0.3, -0.15, 0, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9, 1.05, 1.2,
@@ -47,5 +41,3 @@ class terrain_config:
 
         slope_treshold = 1.5# slopes above this threshold will be corrected to vertical surfaces
         origin_zero_z = True
-
-        

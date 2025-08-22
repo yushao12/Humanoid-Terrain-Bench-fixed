@@ -42,7 +42,10 @@ class Terrain:
         cfg = terrain_config
         self.cfg = terrain_config
         self.num_robots = num_robots
-
+        self.type = cfg.mesh_type
+        if self.type in ["none", 'plane']:
+            return
+        
         self.env_length = cfg.terrain_length
         self.env_width = cfg.terrain_width
 
@@ -60,14 +63,15 @@ class Terrain:
 
         self.height_field_raw = np.zeros((self.tot_rows , self.tot_cols), dtype=np.int16)
 
-        for j in range(self.cfg.num_cols):
-            for i in range(self.cfg.num_rows):
-                if cfg.curriculum:
-                    difficulty = i / (self.cfg.num_rows)
-                else:
-                    difficulty=np.random.uniform(0, 1)
-                terrain = self.make_terrain(difficulty)
-                self.add_terrain_to_map(terrain, i, j)
+        if self.type != "None":
+            for j in range(self.cfg.num_cols):
+                for i in range(self.cfg.num_rows):
+                    if cfg.curriculum:
+                        difficulty = i / (self.cfg.num_rows)
+                    else:
+                        difficulty=np.random.uniform(0, 1)
+                    terrain = self.make_terrain(difficulty)
+                    self.add_terrain_to_map(terrain, i, j)
   
         self.heightsamples = self.height_field_raw
         self.vertices, self.triangles, self.x_edge_mask = convert_heightfield_to_trimesh(   self.height_field_raw,
