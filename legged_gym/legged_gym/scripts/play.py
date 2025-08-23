@@ -56,7 +56,8 @@ def play(args):
     if args.nodelay:
         env_cfg.domain_rand.action_delay_view = 0
 
-    env_cfg.env.num_envs = 20
+   #env_cfg.env.num_envs = 20
+    env_cfg.env.num_envs = 1
     env_cfg.env.episode_length_s = 1000
     env_cfg.commands.resampling_time = 60
     env_cfg.rewards.is_play = True

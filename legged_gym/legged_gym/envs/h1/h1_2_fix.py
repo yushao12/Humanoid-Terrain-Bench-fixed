@@ -132,14 +132,14 @@ class H1_2FixCfg( LeggedRobotCfg ):
 
     class commands( LeggedRobotCfg.commands ):
         class ranges( LeggedRobotCfg.commands.ranges ):
-            lin_vel_x = [0.0, 0.8]  # 包含0，让机器人有机会收到停止命令
-            lin_vel_y = [0.0, 0.0]
+            lin_vel_x = [0.1, 0.8]  # 包含0，让机器人有机会收到停止命令
+            lin_vel_y = [0, 0]
             ang_vel_yaw = [0, 0]
             heading = [0, 0]
 
     class rewards:
         class scales:
-                       
+            
             base_height = -1.0
             termination = -0.0
             tracking_lin_vel = 1.5   # 增加线速度跟踪奖励权重
@@ -151,6 +151,7 @@ class H1_2FixCfg( LeggedRobotCfg ):
             dof_vel = -0.
             dof_acc = -2.5e-7
             base_height = -0. 
+            
             feet_air_time =  2
             collision = -1.
             action_rate = -0.005  # 减少动作变化惩罚，让机器人更自由地运动
@@ -160,20 +161,75 @@ class H1_2FixCfg( LeggedRobotCfg ):
             step_length = 1.0  # 增加步长奖励
             foot_swing_height = 0.5  # 增加脚部摆动高度奖励
             gait_coordination = 1.5  # 增加步态协调性奖励
-            motion_penalty = -2.0  # 直接惩罚静止状态
+            motion_penalty = -2.0  # 直接惩罚静止状态，削弱，原值-2.0
             
             # 新增基于下一个目标点的奖励
-            next_goal_alignment = 3.0    # 下一个目标朝向对齐奖励 (原值: 1.5)
-            next_goal_progress = 2.5     # 下一个目标前进进度奖励 (原值: 1.0)
+            next_goal_alignment = 2.5    # 下一个目标朝向对齐奖励 (原值: 1.5)
+            next_goal_progress = 2.0     # 下一个目标前进进度奖励 (原值: 1.0)
             
             # 新增防止左右脚交叉的奖励
             foot_crossing_penalty = -1.5  # 惩罚脚部交叉
             alternating_gait = 1.8        # 交替步态奖励
-            stride_consistency = 1.2      # 步幅一致性奖励
-            body_balance = 1.0            # 身体平衡奖励
-            
-           
+            stride_consistency = 1.5      # 步幅一致性奖励
+            body_balance = 1.5            # 身体平衡奖励
+            no_fly = 0.25                 # No fly: 1{only one feet on ground}
+            feet_lateral_dist = 2.5       # Feet lateral distance: |y_left foot^B - y_right foot^B - d_min|
+          #  feet_slip = -0.25             # Feet slip: Σ_feet |v_i^foot| * ~1_new contact
+          #  feet_ground_parallel = -2.0   # Feet ground parallel: Σ_feet Var(H_i)实现有问题，训练就会往后转（不支持按论文的方法实现）
+            feet_parallel = -2.5          # Feet parallel: Var(D)
 
+            # 朝向约束奖励
+         #   heading_constraint = -2.0     # 朝向约束惩罚：确保机器人不会朝向后面
+
+            # 新增地形适应奖励
+          #  terrain_adaptive = 3.0        # 地形适应奖励 (主要奖励函数)
+            
+            """
+            # 根据表格重新配置的奖励权重
+            # 1. 基础运动控制奖励
+            tracking_lin_vel = 2.0        # Linear velocity tracking: exp(-||v_xy^cmd - v_xy||^2 / σ)
+            tracking_ang_vel = 1.0        # Angular velocity tracking: exp(-(ω_yaw^cmd - ω_yaw)^2 / σ)
+            lin_vel_z = -0.5              # Linear velocity (z): v_z^2
+            ang_vel_xy = -0.025           # Angular velocity (xy): ||ω_xy||^2
+            orientation = -1.25           # Orientation: ||g_x||^2 + ||g_y||^2
+            
+            # 2. 关节和能量奖励
+            joint_acc = -2.5e-7           # Joint accelerations: ||θ̈||^2
+            joint_power = -2.5e-5         # Joint power: |τ · θ̇^T|
+            body_height = 0.1             # Body height w.r.t. feet: (h^target - h)^2
+            feet_clearance = -0.25        # Feet clearance: Σ_feet (p_z^target - p_z^i)^2 · v_xy^i
+            
+            # 3. 动作平滑性奖励
+            action_rate = -0.01           # Action rate: ||a_t - a_{t-1}||^2
+            smoothness = -0.01            # Smoothness: ||a_t - 2a_{t-1} + a_{t-2}||^2
+            
+            # 4. 接触和稳定性奖励
+            stumble = -3.0                # Feet stumble: 1{∃i, |F_i^xy| > 3|F_i^z|}
+            torques = -2.5e-6             # Torques: Σ_all joints (τ_i / k_p_i)^2
+            dof_vel = -1e-4               # Joint velocity: Σ_all joints θ̇_i^2
+            joint_tracking_err = -0.25    # Joint tracking error: Σ_all joints |θ_i - θ_i^target|^2
+            
+            # 5. 关节偏差奖励
+            arm_joint_dev = -0.1          # Arm joint deviation: Σ_arm joints |θ_i - θ_i^default|^2
+            hip_joint_dev = -0.5          # Hip joint deviation: Σ_hip joints |θ_i - θ_i^default|^2
+            waist_joint_dev = -0.25       # Waist joint deviation: Σ_waist joints |θ_i - θ_i^default|^2
+            upper_body_stability = -1.0   # Upper body stability: 固定上半身并防止手脚交叉
+            
+            # 6. 限制奖励
+            dof_pos_limits = -2.0         # Joint pos limits: Σ_all joints out_i
+            dof_vel_limits = -0.1         # Joint vel limits: Σ_all joints RELU(θ̇_i - θ̇_i^max)
+            torque_limits = -0.1          # Torque limits: Σ_all joints RELU(τ_i - τ_i^max)
+            
+            # 7. 步态和平衡奖励
+            no_fly = 0.25                 # No fly: 1{only one feet on ground}
+            feet_lateral_dist = 2.5       # Feet lateral distance: |y_left foot^B - y_right foot^B - d_min|
+            feet_slip = -0.25             # Feet slip: Σ_feet |v_i^foot| * ~1_new contact
+            feet_ground_parallel = -2.0   # Feet ground parallel: Σ_feet Var(H_i)
+            feet_contact_forces = -2.5e-4  # Feet contact force: Σ_feet RELU(F_i^z - F_th)
+            feet_parallel = -2.5          # Feet parallel: Var(D)
+            contact_momentum = -2.5e-4    # Contact momentum: Σ_feet |v_i^z * F_i^z|
+            """
+            
         only_positive_rewards = True # if true negative total rewards are clipped at zero (avoids early termination problems)
         tracking_sigma = 0.25 # tracking reward = exp(-error^2/sigma)
         soft_dof_pos_limit = 1. # percentage of urdf limits, values above this limit are penalized
@@ -182,6 +238,12 @@ class H1_2FixCfg( LeggedRobotCfg ):
         base_height_target = 1.
         max_contact_force = 100. # forces above this value are penalized
         is_play = False
+        
+        # 目标偏离早停参数
+        goal_deviation_distance_threshold = 8.0  # 距离目标点超过8米时终止
+        goal_deviation_heading_threshold = 5  # 朝向偏离超过90度时终止 (π/2)
+        goal_deviation_time_threshold = 5.0  # 时间超过5秒时终止
+        debug_goal_deviation = True             # 是否打印目标偏离终止的调试信息
     
 
 

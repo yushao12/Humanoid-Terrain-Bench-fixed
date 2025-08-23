@@ -77,6 +77,9 @@ class HumanoidRobot(BaseTask):
         self.debug_viz = True
         self.init_done = False
         self.save = save
+        
+        # 设置目标偏离调试开关
+        self.debug_goal_deviation = getattr(self.cfg.rewards, 'debug_goal_deviation', True)
         self._parse_cfg(self.cfg)
         super().__init__(self.cfg, sim_params, physics_engine, sim_device, headless)
 
@@ -323,6 +326,11 @@ class HumanoidRobot(BaseTask):
 
         self.last_last_actions[:] = self.last_actions[:]
         self.last_actions[:] = self.actions[:]
+        
+        # 更新关节速度历史
+        self.dof_vel_history.append(self.dof_vel.clone())
+        if len(self.dof_vel_history) > 3:  # 只保留最近3帧
+            self.dof_vel_history.pop(0)
         self.last_dof_vel[:] = self.dof_vel[:]
         self.last_torques[:] = self.torques[:]
         self.last_root_vel[:] = self.root_states[:, 7:13]
@@ -358,6 +366,9 @@ class HumanoidRobot(BaseTask):
         reach_goal_cutoff = self.cur_goal_idx >= self.cfg.terrain.num_goals
         height_cutoff = self.root_states[:, 2] < 0.5
 
+        # 新增：目标点偏离早停条件
+        goal_deviation_cutoff = self._check_goal_deviation()
+
         self.time_out_buf = self.episode_length_buf > self.max_episode_length # no terminal reward for time-outs
         self.time_out_buf |= reach_goal_cutoff
 
@@ -365,10 +376,62 @@ class HumanoidRobot(BaseTask):
         self.reset_buf |= roll_cutoff
         self.reset_buf |= pitch_cutoff
         self.reset_buf |= height_cutoff
+        self.reset_buf |= goal_deviation_cutoff  # 添加目标偏离终止条件
 
         self.total_times += len(self.reset_buf.nonzero(as_tuple=False).flatten())
         self.success_times += len(reach_goal_cutoff.nonzero(as_tuple=False).flatten())
         self.complete_times += (self.cur_goal_idx[self.reset_buf.nonzero(as_tuple=False).flatten()] / self.cfg.terrain.num_goals).sum()
+
+    def _check_goal_deviation(self):
+        """检查目标点偏离情况，当距离相差过大，且时间超过5s，且朝向和目标点不对的情况下，作为终结这个goals的早停条件"""
+        try:
+            # 获取当前机器人位置
+            current_pos = self.root_states[:, :3]  # [num_envs, 3]
+            
+            # 获取下一个目标点位置
+            next_goal_pos = self.next_target_pos_rel  # [num_envs, 3]
+            
+            # 计算到下一个目标点的距离
+            distance_to_goal = torch.norm(next_goal_pos, dim=1)  # [num_envs]
+            
+            # 距离阈值：如果距离目标点太远
+            distance_threshold = getattr(self.cfg.rewards, 'goal_deviation_distance_threshold', 3.0)
+            distance_cutoff = distance_to_goal > distance_threshold
+            
+            # 计算当前朝向与目标方向的夹角
+            current_heading = torch.atan2(self.base_lin_vel[:, 1], self.base_lin_vel[:, 0])
+            target_heading = self.next_target_yaw  # 目标朝向
+            
+            # 计算朝向误差
+            heading_error = torch.abs(current_heading - target_heading)
+            # 处理角度环绕问题
+            heading_error = torch.min(heading_error, 2 * torch.pi - heading_error)
+            
+            # 方向阈值：如果朝向偏离太多
+            heading_threshold = getattr(self.cfg.rewards, 'goal_deviation_heading_threshold', torch.pi / 2)
+            heading_cutoff = heading_error > heading_threshold
+            
+            # 时间条件：当前目标点已经存在超过指定时间
+            time_threshold = getattr(self.cfg.rewards, 'goal_deviation_time_threshold', 5.0)
+            time_cutoff = self.episode_length_buf > time_threshold
+            
+            # 综合所有条件：距离过大 AND 时间超过5s AND 朝向不对
+            goal_deviation_cutoff = distance_cutoff & time_cutoff & heading_cutoff
+            
+            # 调试信息：记录终止原因（可选）
+            if hasattr(self, 'debug_goal_deviation') and self.debug_goal_deviation:
+                if torch.any(goal_deviation_cutoff):
+                    terminated_envs = torch.where(goal_deviation_cutoff)[0]
+                    for env_id in terminated_envs:
+                        env_id = env_id.item()
+                        print(f"Env {env_id}: Terminated due to goal deviation - Distance: {distance_to_goal[env_id]:.2f}m > {distance_threshold:.2f}m, Time: {self.episode_length_buf[env_id]:.2f}s > {time_threshold:.2f}s, Heading: {heading_error[env_id]:.2f}rad > {heading_threshold:.2f}rad")
+            
+            return goal_deviation_cutoff
+            
+        except Exception as e:
+            # 如果出现任何错误，返回全False（不终止）
+            print(f"Warning: Error in _check_goal_deviation: {e}")
+            return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
     def reset_idx(self, env_ids):
         """ Reset some environments.
@@ -846,6 +909,7 @@ class HumanoidRobot(BaseTask):
         self.actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.last_actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.last_last_actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
+        self.dof_vel_history = []  # 用于计算关节加速度的历史速度
         self.last_dof_vel = torch.zeros_like(self.dof_vel)
         self.last_torques = torch.zeros_like(self.torques)
         self.last_root_vel = torch.zeros_like(self.root_states[:, 7:13])
@@ -1559,6 +1623,133 @@ class HumanoidRobot(BaseTask):
         # 奖励平衡状态
         return torch.exp(-2.0 * balance_penalty)
 
+    def _extract_terrain_features(self):
+        """从高度图中提取地形特征"""
+        # 前方地形分析 (前方60个点，约3米范围)
+        forward_heights = self.measured_heights[:, :60]  # 前方60个点
+        forward_heights = forward_heights.view(self.num_envs, 6, 10)  # 6x10网格
+        
+        # 计算统计特征
+        height_mean = torch.mean(forward_heights, dim=(1,2))
+        height_std = torch.std(forward_heights, dim=(1,2))
+        height_max = torch.max(forward_heights, dim=(1,2))[0]
+        height_min = torch.min(forward_heights, dim=(1,2))[0]
+        
+        # 计算梯度特征
+        height_gradient_x = torch.diff(forward_heights, dim=1)  # x方向梯度
+        height_gradient_y = torch.diff(forward_heights, dim=2)  # y方向梯度
+        max_gradient_x = torch.max(torch.abs(height_gradient_x), dim=(1,2))[0]
+        max_gradient_y = torch.max(torch.abs(height_gradient_y), dim=(1,2))[0]
+        max_gradient = torch.max(max_gradient_x, max_gradient_y)
+        
+        # 基于规则的地形分类
+        is_flat = (height_std < 0.02).float()
+        has_gap = (height_std > 0.1).float() & (max_gradient > 0.15).float()
+        has_step = (height_std > 0.05).float() & (max_gradient > 0.08).float() & (height_std < 0.1).float()
+        has_pit = (height_min < -0.3).float()
+        
+        return is_flat, has_gap, has_step, has_pit
+
+    def _reward_terrain_adaptive(self):
+        """楼梯地形适应奖励 - 检测高度差并鼓励抬腿"""
+        # 前方地形分析 (前方30个点，约1.5米范围)
+        forward_heights = self.measured_heights[:, :30]  # 前方30个点
+        forward_heights = forward_heights.view(self.num_envs, 5, 6)  # 5x6网格
+        
+        # 计算前方地形的高度差
+        height_diff = torch.max(forward_heights.view(self.num_envs, -1), dim=1)[0] - torch.min(forward_heights.view(self.num_envs, -1), dim=1)[0]
+        
+        # 检测是否有楼梯（高度差大于阈值）
+        has_stairs = (height_diff > 0.10)  # 10cm以上的高度差认为是楼梯
+        
+        # 基础任务奖励
+        task_reward = self._reward_next_goal_progress()
+        
+        # 楼梯特定的抬腿奖励
+        stair_reward = self._reward_stair_climbing() * has_stairs.float()
+        
+        # 动态权重调整
+        terrain_weights = torch.ones_like(height_diff)
+        terrain_weights = torch.where(has_stairs, 1.5, terrain_weights)  # 楼梯地形权重1.5倍
+        
+        return (task_reward + stair_reward) * terrain_weights
+
+    def _reward_normal_walking(self):
+        """平地行走奖励"""
+        # 鼓励稳定的行走
+        forward_velocity = self.base_lin_vel[:, 0]
+        forward_reward = torch.clamp(forward_velocity, min=0.0, max=1.0)
+        
+        # 鼓励身体平衡
+        balance_reward = torch.exp(-torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1))
+        
+        return forward_reward * balance_reward
+
+    def _reward_jump_preparation(self):
+        """跳跃准备奖励"""
+        # 鼓励蹲下准备跳跃
+        base_height = torch.mean(self.root_states[:, 2].unsqueeze(1) - self.measured_heights, dim=1)
+        crouch_reward = torch.exp(-torch.square(base_height - 0.8))  # 鼓励蹲下到0.8米高度
+        
+        # 鼓励腿部弯曲
+        leg_bend_reward = torch.exp(-torch.sum(torch.square(self.dof_pos[:, [0,1,2,3,4,5]] - 0.3), dim=1))
+        
+        # 鼓励停止前进，准备跳跃
+        stop_reward = torch.exp(-torch.square(self.base_lin_vel[:, 0]))
+        
+        return crouch_reward * leg_bend_reward * stop_reward
+
+    def _reward_step_preparation(self):
+        """台阶准备奖励"""
+        # 鼓励抬腿
+        foot_lift_reward = torch.exp(-torch.sum(torch.square(self.dof_pos[:, [6,7,8,9,10,11]] - 0.5), dim=1))
+        
+        # 鼓励身体前倾
+        forward_tilt = torch.atan2(self.projected_gravity[:, 0], self.projected_gravity[:, 2])
+        tilt_reward = torch.exp(-torch.square(forward_tilt - 0.1))  # 鼓励轻微前倾
+        
+        return foot_lift_reward * tilt_reward
+
+    def _reward_pit_avoidance(self):
+        """坑洞避免奖励"""
+        # 鼓励停止前进
+        stop_reward = torch.exp(-torch.square(self.base_lin_vel[:, 0]))
+        
+        # 鼓励身体后仰
+        backward_tilt = torch.atan2(self.projected_gravity[:, 0], self.projected_gravity[:, 2])
+        tilt_reward = torch.exp(-torch.square(backward_tilt + 0.1))  # 鼓励轻微后仰
+        
+        return stop_reward * tilt_reward
+
+    def _reward_stair_climbing(self):
+        """楼梯爬行奖励 - 鼓励抬腿和身体前倾"""
+        # H1机器人有12个腿部关节：左腿6个 + 右腿6个
+        # 左腿关节：hip_yaw, hip_roll, hip_pitch, knee, ankle_pitch, ankle_roll (索引0-5)
+        # 右腿关节：hip_yaw, hip_roll, hip_pitch, knee, ankle_pitch, ankle_roll (索引6-11)
+        
+        # 鼓励抬腿（主要是hip_pitch和knee关节）
+        left_hip_pitch = self.dof_pos[:, 2]   # 左腿hip_pitch
+        left_knee = self.dof_pos[:, 3]        # 左腿knee
+        right_hip_pitch = self.dof_pos[:, 8]  # 右腿hip_pitch
+        right_knee = self.dof_pos[:, 9]       # 右腿knee
+        
+        # 鼓励腿部弯曲（抬腿准备）
+        left_lift = torch.exp(-torch.square(left_hip_pitch - 0.2)) * torch.exp(-torch.square(left_knee - 0.4))
+        right_lift = torch.exp(-torch.square(right_hip_pitch - 0.2)) * torch.exp(-torch.square(right_knee - 0.4))
+        foot_lift_reward = (left_lift + right_lift) / 2.0
+        
+        # 鼓励身体前倾（准备上楼梯）
+        forward_tilt = torch.atan2(self.projected_gravity[:, 0], self.projected_gravity[:, 2])
+        tilt_reward = torch.exp(-torch.square(forward_tilt - 0.15))  # 鼓励前倾15度
+        
+        # 鼓励减速（楼梯前减速）
+        speed_control = torch.exp(-torch.square(self.base_lin_vel[:, 0]))
+        
+        # 鼓励身体平衡
+        balance_reward = torch.exp(-torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1))
+        
+        return foot_lift_reward * tilt_reward * speed_control * balance_reward
+
     def _reward_next_goal_alignment(self):
         # 基于下一个目标点的方向对齐奖励
         # 计算当前朝向与下一个目标方向的夹角
@@ -1589,3 +1780,240 @@ class HumanoidRobot(BaseTask):
         
         return progress_reward * direction_reward
 
+    def _reward_smoothness(self):
+        """动作平滑性奖励: ||a_t - 2a_{t-1} + a_{t-2}||^2"""
+        try:
+            if hasattr(self, 'last_actions') and hasattr(self, 'last_last_actions'):
+                smoothness_penalty = torch.sum(torch.square(self.actions - 2 * self.last_actions + self.last_last_actions), dim=1)
+                return -smoothness_penalty
+        except:
+            pass
+        return torch.zeros(self.num_envs, device=self.device)
+
+    def _reward_joint_acc(self):
+        """关节加速度奖励: ||θ̈||^2"""
+        try:
+            if hasattr(self, 'dof_vel_history') and len(self.dof_vel_history) >= 2:
+                # 计算关节加速度
+                joint_acc = (self.dof_vel - self.dof_vel_history[-1]) / self.dt
+                return -torch.sum(torch.square(joint_acc), dim=1)
+        except:
+            pass
+        return torch.zeros(self.num_envs, device=self.device)
+
+    def _reward_joint_power(self):
+        """关节功率奖励: |τ · θ̇^T|"""
+        # 计算关节功率
+        joint_power = torch.abs(torch.sum(self.torques * self.dof_vel, dim=1))
+        return -joint_power
+
+    def _reward_body_height(self):
+        """身体高度奖励: (h^target - h)^2"""
+        target_height = 1.0  # 目标高度
+        current_height = self.root_states[:, 2]
+        height_error = torch.square(target_height - current_height)
+        return -height_error
+
+    def _reward_feet_clearance(self):
+        """脚部清除奖励: Σ_feet (p_z^target - p_z^i)^2 · v_xy^i"""
+        target_foot_height = 0.05  # 目标脚部高度
+        foot_positions = self.rigid_body_states[:, self.feet_indices, 0:3]
+        foot_heights = foot_positions[:, :, 2]
+        # 获取脚部速度（rigid_body_states的索引7-9是速度）
+        foot_velocities = self.rigid_body_states[:, self.feet_indices, 7:10]
+        foot_xy_vel = torch.norm(foot_velocities[:, :, :2], dim=2)
+        
+        clearance_error = torch.square(target_foot_height - foot_heights)
+        clearance_reward = torch.sum(clearance_error * foot_xy_vel, dim=1)
+        return -clearance_reward
+
+    def _reward_joint_tracking_err(self):
+        """关节跟踪误差奖励: Σ_all joints |θ_i - θ_i^target|^2"""
+        # 使用默认关节位置作为目标
+        default_positions = torch.zeros_like(self.dof_pos)
+        tracking_error = torch.sum(torch.square(self.dof_pos - default_positions), dim=1)
+        return -tracking_error
+
+    def _reward_arm_joint_dev(self):
+        """手臂关节偏差奖励: Σ_arm joints |θ_i - θ_i^default|^2"""
+        # H1机器人只有12个关节，没有独立的手臂关节
+        # 暂时返回零奖励，因为H1是腿部机器人
+        return torch.zeros(self.num_envs, device=self.device)
+
+    def _reward_hip_joint_dev(self):
+        """髋关节偏差奖励: 固定上半身并防止手脚交叉"""
+        # H1机器人的髋关节索引
+        # 左腿: hip_yaw(0), hip_roll(1), hip_pitch(2)
+        # 右腿: hip_yaw(6), hip_roll(7), hip_pitch(8)
+        
+        # 1. 固定上半身：惩罚hip_roll和hip_pitch偏离默认位置
+        hip_roll_pitch_indices = [1, 2, 7, 8]  # 左右腿的hip_roll和hip_pitch
+        hip_roll_pitch_positions = self.dof_pos[:, hip_roll_pitch_indices]
+        default_roll_pitch_positions = torch.zeros_like(hip_roll_pitch_positions)
+        roll_pitch_deviation = torch.sum(torch.square(hip_roll_pitch_positions - default_roll_pitch_positions), dim=1)
+        
+        # 2. 防止手脚交叉：控制hip_yaw关节
+        # 左腿hip_yaw(索引0)和右腿hip_yaw(索引6)应该保持对称
+        left_hip_yaw = self.dof_pos[:, 0]   # 左腿hip_yaw
+        right_hip_yaw = self.dof_pos[:, 6]  # 右腿hip_yaw
+        
+        # 计算hip_yaw的对称性：左右腿hip_yaw应该相反（对称）
+        yaw_symmetry_error = torch.square(left_hip_yaw + right_hip_yaw)  # 理想情况下 left_yaw + right_yaw = 0
+        
+        # 3. 限制hip_yaw的范围，防止过度旋转
+        yaw_range_penalty = torch.sum(torch.square(torch.clamp(torch.abs(left_hip_yaw), min=0.0, max=0.3) - 0.3), dim=0)
+        yaw_range_penalty += torch.sum(torch.square(torch.clamp(torch.abs(right_hip_yaw), min=0.0, max=0.3) - 0.3), dim=0)
+        
+        # 综合惩罚
+        total_penalty = roll_pitch_deviation + yaw_symmetry_error + yaw_range_penalty
+        return -total_penalty
+
+    def _reward_upper_body_stability(self):
+        """上半身稳定性奖励：固定上半身并防止手脚交叉"""
+        try:
+            # 1. 固定上半身：通过控制髋关节来保持上半身稳定
+            # 获取髋关节位置
+            left_hip_roll = self.dof_pos[:, 1]   # 左腿hip_roll
+            left_hip_pitch = self.dof_pos[:, 2]  # 左腿hip_pitch
+            right_hip_roll = self.dof_pos[:, 7]  # 右腿hip_roll
+            right_hip_pitch = self.dof_pos[:, 8] # 右腿hip_pitch
+            
+            # 惩罚髋关节偏离中立位置（固定上半身）
+            hip_stability_penalty = torch.square(left_hip_roll) + torch.square(left_hip_pitch) + \
+                                   torch.square(right_hip_roll) + torch.square(right_hip_pitch)
+            
+            # 2. 防止手脚交叉：控制hip_yaw关节的对称性
+            left_hip_yaw = self.dof_pos[:, 0]   # 左腿hip_yaw
+            right_hip_yaw = self.dof_pos[:, 6]  # 右腿hip_yaw
+            
+            # 计算hip_yaw的对称性：左右腿hip_yaw应该相反（对称）
+            # 理想情况下：left_hip_yaw + right_hip_yaw = 0
+            yaw_symmetry_error = torch.square(left_hip_yaw + right_hip_yaw)
+            
+            # 3. 限制hip_yaw的范围，防止过度旋转
+            yaw_range_penalty = torch.square(torch.clamp(torch.abs(left_hip_yaw), min=0.0, max=0.3) - 0.3)
+            yaw_range_penalty += torch.square(torch.clamp(torch.abs(right_hip_yaw), min=0.0, max=0.3) - 0.3)
+            
+            # 4. 鼓励hip_yaw保持小角度（防止过度旋转）
+            yaw_magnitude_penalty = torch.square(left_hip_yaw) + torch.square(right_hip_yaw)
+            
+            # 综合惩罚
+            total_penalty = hip_stability_penalty + yaw_symmetry_error + yaw_range_penalty + 0.1 * yaw_magnitude_penalty
+            
+            return -total_penalty
+            
+        except Exception as e:
+            return torch.zeros(self.num_envs, device=self.device)
+
+    def _reward_waist_joint_dev(self):
+        """腰部关节偏差奖励: Σ_waist joints |θ_i - θ_i^default|^2"""
+        # H1机器人只有12个关节，没有独立的腰部关节
+        # 暂时返回零奖励，因为H1是腿部机器人
+        return torch.zeros(self.num_envs, device=self.device)
+
+    def _reward_no_fly(self):
+        """无飞行奖励: 1{only one feet on ground}"""
+        # 计算接触地面的脚数量
+        contact_forces = self.contact_forces[:, self.feet_indices, 2]  # z方向力
+        feet_on_ground = (contact_forces > 0.1).float()  # 阈值判断
+        num_feet_on_ground = torch.sum(feet_on_ground, dim=1)
+        
+        # 奖励只有一只脚接触地面（行走状态）
+        no_fly_reward = (num_feet_on_ground == 1).float()
+        return no_fly_reward
+
+    def _reward_feet_lateral_dist(self):
+        """脚部横向距离奖励: |y_left foot^B - y_right foot^B - d_min|"""
+        # 获取左右脚在身体坐标系中的位置
+        left_foot_pos = self.rigid_body_states[:, self.feet_indices[0], 0:3]
+        right_foot_pos = self.rigid_body_states[:, self.feet_indices[1], 0:3]
+        
+        # 计算横向距离
+        lateral_distance = torch.abs(left_foot_pos[:, 1] - right_foot_pos[:, 1])
+        target_distance = 0.3  # 目标横向距离
+        distance_error = torch.abs(lateral_distance - target_distance)
+        return -distance_error
+
+    def _reward_feet_slip(self):
+        """脚部滑动奖励: Σ_feet |v_i^foot| * ~1_new contact"""
+        # 获取脚部速度
+        foot_velocities = self.rigid_body_states[:, self.feet_indices, 7:10]
+        foot_xy_vel = torch.norm(foot_velocities[:, :, :2], dim=2)
+        
+        # 检测新接触（简化实现）
+        contact_forces = self.contact_forces[:, self.feet_indices, 2]
+        new_contact = (contact_forces > 0.1).float()
+        
+        # 计算滑动惩罚
+        slip_penalty = torch.sum(foot_xy_vel * new_contact, dim=1)
+        return -slip_penalty
+
+    def _reward_feet_ground_parallel(self):
+        """脚部地面平行奖励: 基于脚部方向与垂直方向的偏差"""
+        try:
+            # 获取脚部方向（四元数）
+            foot_orientations = self.rigid_body_states[:, self.feet_indices, 3:7]  # [num_envs, num_feet, 4]
+            
+            # 简化实现：基于四元数的x,y分量计算倾斜度
+            # 当脚部水平时，四元数的x,y分量应该接近0
+            # 当脚部倾斜时，x,y分量会增大
+            
+            x, y = foot_orientations[:, :, 1], foot_orientations[:, :, 2]  # 四元数的x,y分量
+            
+            # 计算倾斜度：x² + y² 越大说明脚部越倾斜
+            tilt_penalty = torch.sum(x**2 + y**2, dim=1)  # [num_envs]
+            
+            return -tilt_penalty
+            
+        except Exception as e:
+            # 如果计算失败，返回零奖励
+            return torch.zeros(self.num_envs, device=self.device)
+
+    def _reward_feet_parallel(self):
+        """脚部平行奖励: Var(D)"""
+        try:
+            # 计算左右脚之间的方向差异
+            left_foot_orientation = self.rigid_body_states[:, self.feet_indices[0], 3:7]
+            right_foot_orientation = self.rigid_body_states[:, self.feet_indices[1], 3:7]
+            
+            # 计算方向差异的方差
+            orientation_diff = left_foot_orientation - right_foot_orientation
+            parallel_variance = torch.var(orientation_diff, dim=1)
+            return -parallel_variance
+        except:
+            return torch.zeros(self.num_envs, device=self.device)
+
+    def _reward_contact_momentum(self):
+        """接触动量奖励: Σ_feet |v_i^z * F_i^z|"""
+        # 获取脚部z方向速度和力
+        # rigid_body_states: [pos(0:3), quat(3:7), lin_vel(7:10), ang_vel(10:13)]
+        foot_velocities = self.rigid_body_states[:, self.feet_indices, 9]  # z方向线速度
+        contact_forces = self.contact_forces[:, self.feet_indices, 2]  # z方向力
+        
+        # 计算接触动量
+        contact_momentum = torch.abs(foot_velocities * contact_forces)
+        return -torch.sum(contact_momentum, dim=1)
+
+    def _reward_heading_constraint(self):
+        """朝向约束奖励：确保机器人不会朝向后面"""
+        try:
+            # 获取当前朝向（基于身体yaw）
+            current_yaw = self.yaw  # 身体朝向
+            
+            # 目标朝向：向前（0度）
+            target_yaw = torch.zeros_like(current_yaw)
+            
+            # 计算朝向误差
+            yaw_error = torch.abs(current_yaw - target_yaw)
+            # 处理角度环绕问题
+            yaw_error = torch.min(yaw_error, 2 * torch.pi - yaw_error)
+            
+            # 如果朝向后面（误差大于π/2），给予严重惩罚
+            backward_penalty = torch.where(yaw_error > torch.pi/2, 
+                                         torch.exp(yaw_error - torch.pi/2), 
+                                         torch.zeros_like(yaw_error))
+            
+            return -backward_penalty  # 返回负值作为惩罚
+            
+        except Exception as e:
+            return torch.zeros(self.num_envs, device=self.device)

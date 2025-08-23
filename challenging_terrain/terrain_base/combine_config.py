@@ -28,9 +28,13 @@ class combine_config:
              #("single", 3, 1),
                 # ("addition", 0, 0.5),
                 # ("multiplication", 3, 0.4),
-            #    ("single", 5, 0.5),   # 80% 楼梯
-                ("single", 3, 1),   # 70% 平坦地形
+             #   ("single", 5, 0.8),   # 80% 楼梯
+              #  ("single", 3, 1),   # 70% 平坦地形
               #  ("single", 4, 0.3),   # 30% 不平整地形（适度噪声）
+                ("single", 3, 0.6),   
+                ("single", 4, 0.2),   
+                ("addition", 0, 0.1),
+                ("multiplication", 2, 0.1)
         ]
 
 class generator:
