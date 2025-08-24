@@ -1923,16 +1923,40 @@ class HumanoidRobot(BaseTask):
         return no_fly_reward
 
     def _reward_feet_lateral_dist(self):
-        """脚部横向距离奖励: |y_left foot^B - y_right foot^B - d_min|"""
+        """脚部横向距离奖励: 确保右脚在左脚右边，并保持合适的距离"""
         # 获取左右脚在身体坐标系中的位置
         left_foot_pos = self.rigid_body_states[:, self.feet_indices[0], 0:3]
         right_foot_pos = self.rigid_body_states[:, self.feet_indices[1], 0:3]
         
-        # 计算横向距离
-        lateral_distance = torch.abs(left_foot_pos[:, 1] - right_foot_pos[:, 1])
-        target_distance = 0.3  # 目标横向距离
-        distance_error = torch.abs(lateral_distance - target_distance)
-        return -distance_error
+        # 计算左右脚的y坐标（横向位置）
+        left_foot_y = left_foot_pos[:, 1]   # 左脚y坐标
+        right_foot_y = right_foot_pos[:, 1]  # 右脚y坐标
+        
+        # 1. 确保右脚在左脚右边（y坐标更大）
+        # 如果右脚在左脚左边，给予严重惩罚
+        wrong_side_penalty = torch.where(right_foot_y < left_foot_y, 
+                                       torch.exp(left_foot_y - right_foot_y), 
+                                       torch.zeros_like(left_foot_y))
+        
+        # 2. 计算横向距离
+        lateral_distance = right_foot_y - left_foot_y  # 正值表示右脚在右边
+        
+        # 3. 目标距离范围：0.2-0.4米
+        min_distance = 0.2
+        max_distance = 0.4
+        target_distance = 0.3
+        
+        # 4. 距离奖励：在合适范围内给予奖励，超出范围给予惩罚
+        distance_reward = torch.where(
+            (lateral_distance >= min_distance) & (lateral_distance <= max_distance),
+            torch.exp(-torch.abs(lateral_distance - target_distance)),  # 在范围内，越接近目标距离奖励越高
+            -torch.abs(lateral_distance - target_distance)  # 超出范围，距离越远惩罚越重
+        )
+        
+        # 5. 组合奖励：方向约束 + 距离奖励
+        total_reward = distance_reward - 2.0 * wrong_side_penalty
+        
+        return total_reward
 
     def _reward_feet_slip(self):
         """脚部滑动奖励: Σ_feet |v_i^foot| * ~1_new contact"""
@@ -2014,6 +2038,173 @@ class HumanoidRobot(BaseTask):
                                          torch.zeros_like(yaw_error))
             
             return -backward_penalty  # 返回负值作为惩罚
+            
+        except Exception as e:
+            return torch.zeros(self.num_envs, device=self.device)
+
+    def _reward_feet_edge(self):
+        """脚部边缘检测奖励: Σ I(foot_on_edge) × I(terrain_level > 3)"""
+        try:
+            # 获取脚部位置
+            foot_positions = self.rigid_body_states[:, self.feet_indices, 0:3]
+            
+            # 获取地形高度信息（从observation中获取）
+            # 这里需要根据实际的地形扫描数据来判断脚部是否在边缘
+            # 简化实现：基于脚部高度变化检测边缘
+            
+            # 计算脚部高度变化（模拟边缘检测）
+            foot_heights = foot_positions[:, :, 2]
+            
+            # 检测脚部是否在边缘（高度变化较大的地方）
+            # 这里使用一个简化的边缘检测方法
+            edge_threshold = 0.1  # 高度变化阈值
+            
+            # 计算脚部周围的高度变化（简化实现）
+            # 在实际实现中，需要扫描脚部周围的地形高度
+            foot_on_edge = torch.zeros_like(foot_heights)
+            
+            # 如果脚部高度变化超过阈值，认为在边缘
+            # 这里使用脚部接触力作为代理指标
+            contact_forces = self.contact_forces[:, self.feet_indices, 2]
+            foot_on_edge = torch.where(contact_forces < 0.5, torch.ones_like(foot_on_edge), foot_on_edge)
+            
+            # 地形等级检测（简化实现）
+            # 在实际实现中，需要根据地形复杂度判断等级
+            terrain_level = torch.ones_like(foot_on_edge) * 2  # 假设当前地形等级为2
+            
+            # 计算边缘惩罚
+            edge_penalty = torch.sum(foot_on_edge * (terrain_level > 3), dim=1)
+            
+            return -edge_penalty
+            
+        except Exception as e:
+            return torch.zeros(self.num_envs, device=self.device)
+
+    def _reward_huge_step(self):
+        """大步惩罚奖励: Σ abs(x_left_ankle - x_right_ankle)"""
+        try:
+            # 获取左右脚踝的x坐标位置
+            left_ankle_pos = self.rigid_body_states[:, self.feet_indices[0], 0:3]  # 左脚踝
+            right_ankle_pos = self.rigid_body_states[:, self.feet_indices[1], 0:3]  # 右脚踝
+            
+            # 计算左右脚踝在x方向的距离
+            x_distance = torch.abs(left_ankle_pos[:, 0] - right_ankle_pos[:, 0])
+            
+            # 大步惩罚：距离越大惩罚越重
+            # 设置合理的前后距离范围
+            max_reasonable_distance = 0.5  # 最大合理距离
+            
+            huge_step_penalty = torch.where(
+                x_distance > max_reasonable_distance,
+                x_distance - max_reasonable_distance,  # 超出范围的部分作为惩罚
+                torch.zeros_like(x_distance)
+            )
+            
+            return -huge_step_penalty
+            
+        except Exception as e:
+            return torch.zeros(self.num_envs, device=self.device)
+
+    def _reward_feet_yaw(self):
+        """脚部偏航角奖励: Σ (yaw_ankle)^2"""
+        try:
+            # 获取脚部方向（四元数）
+            foot_orientations = self.rigid_body_states[:, self.feet_indices, 3:7]
+            
+            # 将四元数转换为欧拉角（简化实现）
+            # 这里使用四元数的z分量作为偏航角的近似
+            # 在实际实现中，需要完整的四元数到欧拉角转换
+            
+            # 简化实现：使用四元数的z分量
+            foot_yaw = foot_orientations[:, :, 3]  # 四元数的z分量
+            
+            # 计算偏航角惩罚：偏航角越大惩罚越重
+            yaw_penalty = torch.sum(foot_yaw**2, dim=1)
+            
+            return -yaw_penalty
+            
+        except Exception as e:
+            return torch.zeros(self.num_envs, device=self.device)
+
+    def _reward_feet_dis(self):
+        """脚部距离奖励: Σ ((y_left_ankle) - (y_right_ankle))^2"""
+        try:
+            # 获取左右脚踝的y坐标位置
+            left_ankle_pos = self.rigid_body_states[:, self.feet_indices[0], 0:3]  # 左脚踝
+            right_ankle_pos = self.rigid_body_states[:, self.feet_indices[1], 0:3]  # 右脚踝
+            
+            # 计算左右脚踝在y方向的距离
+            y_distance = left_ankle_pos[:, 1] - right_ankle_pos[:, 1]
+            
+            # 计算距离惩罚：距离偏离目标值越远惩罚越重
+            target_distance = 0.3  # 目标横向距离
+            distance_error = (y_distance - target_distance)**2
+            
+            return -distance_error
+            
+        except Exception as e:
+            return torch.zeros(self.num_envs, device=self.device)
+
+    def _reward_knee_dis(self):
+        """膝盖距离奖励: Σ ((y_left_knee) - (y_right_knee))^2"""
+        try:
+            # 获取膝盖位置（需要根据实际的关节索引）
+            # 假设膝盖关节的索引
+            knee_indices = [2, 8]  # 左右膝盖关节索引（需要根据实际URDF调整）
+            
+            # 获取膝盖位置
+            left_knee_pos = self.rigid_body_states[:, knee_indices[0], 0:3]  # 左膝盖
+            right_knee_pos = self.rigid_body_states[:, knee_indices[1], 0:3]  # 右膝盖
+            
+            # 计算左右膝盖在y方向的距离
+            y_distance = left_knee_pos[:, 1] - right_knee_pos[:, 1]
+            
+            # 计算距离惩罚：距离偏离目标值越远惩罚越重
+            target_distance = 0.3  # 目标横向距离
+            distance_error = (y_distance - target_distance)**2
+            
+            return -distance_error
+            
+        except Exception as e:
+            return torch.zeros(self.num_envs, device=self.device)
+
+    def _reward_knee_foot(self):
+        """膝盖脚部对齐奖励: Σ ((y_knee) - (y_ankle))^2"""
+        try:
+            # 获取膝盖和脚踝位置
+            knee_indices = [2, 8]  # 左右膝盖关节索引
+            foot_indices = self.feet_indices
+            
+            # 计算左右腿的膝盖-脚踝对齐
+            left_knee_pos = self.rigid_body_states[:, knee_indices[0], 0:3]
+            left_foot_pos = self.rigid_body_states[:, foot_indices[0], 0:3]
+            
+            right_knee_pos = self.rigid_body_states[:, knee_indices[1], 0:3]
+            right_foot_pos = self.rigid_body_states[:, foot_indices[1], 0:3]
+            
+            # 计算膝盖和脚踝在y方向的对齐误差
+            left_alignment_error = (left_knee_pos[:, 1] - left_foot_pos[:, 1])**2
+            right_alignment_error = (right_knee_pos[:, 1] - right_foot_pos[:, 1])**2
+            
+            # 总对齐误差
+            total_alignment_error = left_alignment_error + right_alignment_error
+            
+            return -total_alignment_error
+            
+        except Exception as e:
+            return torch.zeros(self.num_envs, device=self.device)
+
+    def _reward_foot_height(self):
+        """脚部高度奖励: Σ (z_ankle)"""
+        try:
+            # 获取脚踝的z坐标位置
+            foot_positions = self.rigid_body_states[:, self.feet_indices, 0:3]
+            foot_heights = foot_positions[:, :, 2]
+            
+            # 奖励脚部高度：高度越高奖励越大（鼓励抬腿）
+            height_reward = torch.sum(foot_heights, dim=1)
+            
+            return height_reward
             
         except Exception as e:
             return torch.zeros(self.num_envs, device=self.device)

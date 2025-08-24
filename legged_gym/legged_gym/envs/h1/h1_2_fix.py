@@ -134,7 +134,7 @@ class H1_2FixCfg( LeggedRobotCfg ):
         class ranges( LeggedRobotCfg.commands.ranges ):
             lin_vel_x = [0.1, 0.8]  # 包含0，让机器人有机会收到停止命令
             lin_vel_y = [0, 0]
-            ang_vel_yaw = [0, 0]
+            ang_vel_yaw = [-0.3, 0.3]
             heading = [0, 0]
 
     class rewards:
@@ -142,8 +142,8 @@ class H1_2FixCfg( LeggedRobotCfg ):
             
             base_height = -1.0
             termination = -0.0
-            tracking_lin_vel = 1.5   # 增加线速度跟踪奖励权重
-            tracking_ang_vel = 0.8   # 增加角速度跟踪奖励权重
+            tracking_lin_vel = 2.5   # 增加线速度跟踪奖励权重，强化方向控制
+            tracking_ang_vel = 1.2   # 增加角速度跟踪奖励权重，强化转向控制
             lin_vel_z = -2.0
             ang_vel_xy = -0.05
             orientation = -2.5
@@ -158,14 +158,14 @@ class H1_2FixCfg( LeggedRobotCfg ):
             stand_still = -1.0  # 大幅增加静止惩罚，强制机器人运动,削弱，原值-10.0
             alive = 0.02  # 进一步降低生存奖励权重
             forward_progress = 0.5  # 增加前进进度奖励，削弱，原值2.0
-            step_length = 1.0  # 增加步长奖励
-            foot_swing_height = 0.5  # 增加脚部摆动高度奖励
-            gait_coordination = 1.5  # 增加步态协调性奖励
+          #  step_length = 1.0  # 增加步长奖励
+          #  foot_swing_height = 0.5  # 增加脚部摆动高度奖励
+          #  gait_coordination = 1.5  # 增加步态协调性奖励
             motion_penalty = -2.0  # 直接惩罚静止状态，削弱，原值-2.0
             
             # 新增基于下一个目标点的奖励
-            next_goal_alignment = 2.5    # 下一个目标朝向对齐奖励 (原值: 1.5)
-            next_goal_progress = 2.0     # 下一个目标前进进度奖励 (原值: 1.0)
+        #    next_goal_alignment = 1.5    # 下一个目标朝向对齐奖励 (原值: 1.5)
+        #    next_goal_progress = 1.0     # 下一个目标前进进度奖励 (原值: 1.0)
             
             # 新增防止左右脚交叉的奖励
             foot_crossing_penalty = -1.5  # 惩罚脚部交叉
@@ -173,10 +173,19 @@ class H1_2FixCfg( LeggedRobotCfg ):
             stride_consistency = 1.5      # 步幅一致性奖励
             body_balance = 1.5            # 身体平衡奖励
             no_fly = 0.25                 # No fly: 1{only one feet on ground}
-            feet_lateral_dist = 2.5       # Feet lateral distance: |y_left foot^B - y_right foot^B - d_min|
+            feet_lateral_dist = 4.0       # Feet lateral distance: 确保右脚在左脚右边，防止交叉
           #  feet_slip = -0.25             # Feet slip: Σ_feet |v_i^foot| * ~1_new contact
           #  feet_ground_parallel = -2.0   # Feet ground parallel: Σ_feet Var(H_i)实现有问题，训练就会往后转（不支持按论文的方法实现）
             feet_parallel = -2.5          # Feet parallel: Var(D)
+
+            # 新增表格中的奖励函数
+            feet_edge = -1.0              # Feet edge: Σ I(foot_on_edge) × I(terrain_level > 3)
+            huge_step = 0.001             # Huge step: Σ abs(x_left_ankle - x_right_ankle)
+            feet_yaw = -2.0               # Feet yaw: Σ (yaw_ankle)^2
+            feet_dis = -0.001             # Feet dis: Σ ((y_left_ankle) - (y_right_ankle))^2
+            knee_dis = -0.001             # Knee dis: Σ ((y_left_knee) - (y_right_knee))^2
+            knee_foot = -0.001            # Knee foot: Σ ((y_knee) - (y_ankle))^2
+            foot_height = 0.01            # Foot height: Σ (z_ankle)
 
             # 朝向约束奖励
          #   heading_constraint = -2.0     # 朝向约束惩罚：确保机器人不会朝向后面
@@ -222,7 +231,7 @@ class H1_2FixCfg( LeggedRobotCfg ):
             
             # 7. 步态和平衡奖励
             no_fly = 0.25                 # No fly: 1{only one feet on ground}
-            feet_lateral_dist = 2.5       # Feet lateral distance: |y_left foot^B - y_right foot^B - d_min|
+            feet_lateral_dist = 4.0       # Feet lateral distance: 确保右脚在左脚右边，防止交叉
             feet_slip = -0.25             # Feet slip: Σ_feet |v_i^foot| * ~1_new contact
             feet_ground_parallel = -2.0   # Feet ground parallel: Σ_feet Var(H_i)
             feet_contact_forces = -2.5e-4  # Feet contact force: Σ_feet RELU(F_i^z - F_th)
